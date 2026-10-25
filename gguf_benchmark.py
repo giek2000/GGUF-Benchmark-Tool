@@ -51,7 +51,7 @@ import system_info
 
 
 APP_NAME = "GGUF Benchmark Tool"
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.4.0"
 APP_AUTHOR = "Ricardo de Koning"
 CONFIG_FILENAME = "gguf_benchmark_config.json"
 HISTORY_FILENAME = "gguf_benchmark_history.json"
@@ -201,6 +201,35 @@ def find_llama_bench(configured: str | None = None) -> str | None:
     return shutil.which(exe_name)
 
 
+# GPU backend DLLs that ship next to llama-bench.exe in each build type.
+GPU_BACKEND_DLLS = {
+    "ggml-cuda.dll": "CUDA",
+    "ggml-vulkan.dll": "Vulkan",
+    "ggml-sycl.dll": "SYCL",
+    "ggml-hip.dll": "ROCm",
+    "ggml-rocm.dll": "ROCm",
+}
+
+
+def detect_engine_gpu(engine_path: str | None) -> str | None:
+    """Return the GPU backend name (e.g. 'CUDA') if the engine folder contains a
+    GPU backend DLL, else None. This tells us whether offloading to the GPU is
+    even possible with the current engine, so we can prompt the user sensibly."""
+    if not engine_path:
+        return None
+    try:
+        folder = Path(engine_path).parent
+        if not folder.is_dir():
+            return None
+        present = {p.name.lower() for p in folder.iterdir() if p.is_file()}
+        for dll, name in GPU_BACKEND_DLLS.items():
+            if dll in present:
+                return name
+    except Exception:
+        return None
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Benchmark parameters & result parsing
 # --------------------------------------------------------------------------- #
@@ -210,7 +239,7 @@ class BenchParams:
     n_prompt: str = "512"
     n_gen: str = "128"
     n_threads: str = ""
-    n_gpu_layers: str = "0"
+    n_gpu_layers: str = "99"
     batch_size: str = ""
     repetitions: str = "3"
     output_format: str = "md"
@@ -406,7 +435,7 @@ class BenchmarkApp(tk.Tk):
         self.p_prompt = tk.StringVar(value="512")
         self.p_gen = tk.StringVar(value="128")
         self.p_threads = tk.StringVar(value="")
-        self.p_ngl = tk.StringVar(value="0")
+        self.p_ngl = tk.StringVar(value="99")
         self.p_batch = tk.StringVar(value="")
         self.p_reps = tk.StringVar(value="3")
         self.p_format = tk.StringVar(value="md")
@@ -416,7 +445,7 @@ class BenchmarkApp(tk.Tk):
             ("Prompt tokens (-p)", self.p_prompt, "e.g. 512 or 128,512"),
             ("Gen tokens (-n)", self.p_gen, "e.g. 128"),
             ("Threads (-t)", self.p_threads, "blank = auto"),
-            ("GPU layers (-ngl)", self.p_ngl, "0 = CPU only, 99 = all"),
+            ("GPU layers (-ngl)", self.p_ngl, "99 = use GPU fully, 0 = CPU only"),
             ("Batch size (-b)", self.p_batch, "blank = default"),
             ("Repetitions (-r)", self.p_reps, "repeats per test"),
         ]
@@ -522,7 +551,9 @@ class BenchmarkApp(tk.Tk):
     # ---- Engine -----------------------------------------------------------#
     def _refresh_engine_label(self):
         if self.llama_bench_path:
-            self.engine_var.set(f"Engine: {self.llama_bench_path}")
+            gpu = detect_engine_gpu(self.llama_bench_path)
+            suffix = f"   [{gpu} GPU build]" if gpu else "   [CPU build]"
+            self.engine_var.set(f"Engine: {self.llama_bench_path}{suffix}")
         else:
             self.engine_var.set("Engine: NOT FOUND - Browse or Download a build.")
 
@@ -690,8 +721,15 @@ class BenchmarkApp(tk.Tk):
             self.cfg["llama_bench_path"] = found
             save_config(self.cfg)
             self._out_queue.put(f"\nDone. Engine ready:\n  {found}\n")
-            if spec.get("needs_cudart"):
-                self._out_queue.put("Tip: set 'GPU layers (-ngl)' to 99 to offload the whole model.\n")
+
+            # If this is a GPU build, default to offloading all layers so the
+            # GPU is actually used. Set it on the UI thread.
+            gpu = detect_engine_gpu(found)
+            if gpu:
+                self.after(0, lambda: self.p_ngl.set("99"))
+                self._out_queue.put(
+                    f"Detected a {gpu} GPU build. Set 'GPU layers (-ngl)' to 99 so the\n"
+                    "whole model runs on the GPU. (Set it to 0 if you want a CPU-only test.)\n")
             # _start_worker emits __DONE__
         except urllib.error.HTTPError as exc:
             self._out_queue.put(
@@ -780,6 +818,27 @@ class BenchmarkApp(tk.Tk):
         params = self._collect_params()
         if params is None:
             return
+
+        # Guard: a GPU engine with -ngl 0 would run entirely on the CPU, which
+        # is the #1 "my GPU isn't being used" surprise. Offer to fix it.
+        gpu = detect_engine_gpu(self.llama_bench_path)
+        ngl = params.n_gpu_layers.strip()
+        if gpu and (ngl == "" or ngl == "0"):
+            choice = messagebox.askyesnocancel(
+                APP_NAME,
+                f"This is a {gpu} (GPU) engine, but 'GPU layers (-ngl)' is {ngl or '0'}, "
+                "so the benchmark will run entirely on the CPU and the GPU will stay idle.\n\n"
+                "Set GPU layers to 99 (use the GPU fully) for this run?\n\n"
+                "Yes = use the GPU (recommended)\n"
+                "No = keep CPU-only\n"
+                "Cancel = don't run")
+            if choice is None:
+                self.status_var.set("Cancelled")
+                return
+            if choice:
+                params.n_gpu_layers = "99"
+                self.p_ngl.set("99")
+
         # Run with the user's chosen display format, but also capture JSON for history.
         display_cmd = params.build_command(self.llama_bench_path)
         self._clear_output()
@@ -835,6 +894,7 @@ class BenchmarkApp(tk.Tk):
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
             self._proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace",
                 bufsize=1, creationflags=creationflags,
                 cwd=str(Path(self.llama_bench_path).parent))
             assert self._proc.stdout is not None

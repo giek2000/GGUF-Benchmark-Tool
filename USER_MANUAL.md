@@ -126,6 +126,9 @@ Notes:
 - For CUDA, the matching CUDA runtime is downloaded automatically.
 - The download shows live progress. Files are saved in a `llama.cpp` folder next
   to the app and selected for you.
+- When you download (or load) a GPU build, the app sets **GPU layers (-ngl)** to
+  `99` automatically so the GPU is actually used. The engine bar also shows the
+  detected build type, e.g. `[CUDA GPU build]` or `[CPU build]`.
 - **List devices** runs `llama-bench --list-devices` to show which GPUs/CPUs the
   current engine can see — handy to confirm your GPU is detected.
 
@@ -157,7 +160,7 @@ A dropdown of ready-made settings. Picking one fills in the parameters below.
 | Prompt tokens        | `-p`   | How many input tokens to process. `512`, or a list like `128,512`. |
 | Gen tokens           | `-n`   | How many tokens to generate.                         |
 | Threads              | `-t`   | CPU threads. Blank = automatic.                      |
-| GPU layers           | `-ngl` | Layers to offload to the GPU. `0` = CPU only, `99` = all. |
+| GPU layers           | `-ngl` | Layers to offload to the GPU. `99` = use the GPU fully (default on GPU builds), `0` = CPU only. |
 | Batch size           | `-b`   | Logical batch size. Blank = default.                 |
 | Repetitions          | `-r`   | How many times to repeat each test (averaged).       |
 | Output format        | `-o`   | How results are printed: md / csv / json / jsonl / sql. |
@@ -273,6 +276,13 @@ Your NVIDIA driver is older than the CUDA build. Fixes, easiest first:
 3. Switch to the **Vulkan** backend.
 4. Use a **CPU** build with GPU layers (`-ngl`) set to `0`.
 The app detects this error and shows these steps automatically.
+
+**The GPU isn't being used during a benchmark.**
+Check **GPU layers (-ngl)**. If it's `0`, the whole model runs on the CPU even
+with a GPU engine loaded — set it to `99` to offload all layers to the GPU. The
+results table confirms this: the `backend` column should read `CUDA` / `Vulkan`
+(not `CPU`) and `ngl` should be non-zero. When you use a GPU engine with
+`-ngl 0`, the app now warns you and offers to switch to `99` before running.
 
 **Out of memory.**
 Lower **GPU layers (-ngl)**, use a smaller or more-quantized model, or reduce

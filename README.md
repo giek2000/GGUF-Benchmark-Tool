@@ -1,4 +1,4 @@
-# GGUF Benchmark Tool v2.3.1
+# GGUF Benchmark Tool v2.4.0
 
 > New to the app? Read the **[User Manual](USER_MANUAL.md)** for a full,
 > plain-language walkthrough.
@@ -103,7 +103,7 @@ on Windows).
 build.bat
 ```
 
-Produces `dist\GGUFBenchmark_v2.3.1.exe` — a single-file, windowed executable
+Produces `dist\GGUFBenchmark_v2.4.0.exe` — a single-file, windowed executable
 with the app icon embedded.
 
 ## Benchmark parameters
