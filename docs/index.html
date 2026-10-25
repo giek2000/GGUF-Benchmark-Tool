@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GGUF Benchmark Tool</title>
+<meta name="description" content="A free, standalone Windows app to benchmark GGUF language models with llama.cpp. No install, no command line." />
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1e2127;
+    --panel2: #262a32;
+    --text: #e7e9ee;
+    --muted: #9aa3b2;
+    --green: #50dc82;
+    --green-dim: #37a05f;
+    --border: #2f343d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  a { color: var(--green); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+
+  header {
+    text-align: center;
+    padding: 70px 20px 50px;
+    background: radial-gradient(900px 400px at 50% -10%, rgba(80,220,130,0.12), transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    width: 84px; height: 84px; margin: 0 auto 18px;
+    display: flex; align-items: flex-end; justify-content: center; gap: 6px;
+    background: #1e1e1e; border-radius: 16px; padding: 16px;
+  }
+  .logo span { width: 14px; background: var(--green-dim); border-radius: 3px; }
+  .logo span:nth-child(1) { height: 34%; }
+  .logo span:nth-child(2) { height: 62%; }
+  .logo span:nth-child(3) { height: 92%; background: var(--green); }
+  h1 { font-size: 2.6rem; margin: 0 0 10px; letter-spacing: -0.5px; }
+  .tagline { font-size: 1.2rem; color: var(--muted); max-width: 620px; margin: 0 auto 30px; }
+
+  .btn {
+    display: inline-block; background: var(--green); color: #06230f;
+    font-weight: 700; padding: 14px 30px; border-radius: 10px; font-size: 1.05rem;
+    transition: transform 0.08s ease, background 0.15s ease;
+  }
+  .btn:hover { background: #63e995; text-decoration: none; transform: translateY(-1px); }
+  .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); margin-left: 10px; }
+  .btn.secondary:hover { background: #30353f; }
+  .sub { margin-top: 12px; color: var(--muted); font-size: 0.9rem; }
+
+  section { padding: 50px 0; border-bottom: 1px solid var(--border); }
+  h2 { font-size: 1.7rem; margin: 0 0 22px; }
+  h3 { margin: 0 0 6px; font-size: 1.1rem; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+  .card .ico { font-size: 1.6rem; margin-bottom: 8px; }
+  .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+
+  ol.steps { counter-reset: step; list-style: none; padding: 0; margin: 0; }
+  ol.steps li {
+    position: relative; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 20px 20px 70px; margin-bottom: 14px;
+  }
+  ol.steps li::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 18px; top: 18px; width: 36px; height: 36px;
+    background: var(--green); color: #06230f; font-weight: 800;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  }
+  ol.steps li p { margin: 6px 0 0; color: var(--muted); }
+
+  .callout {
+    background: var(--panel2); border-left: 4px solid var(--green);
+    border-radius: 8px; padding: 16px 18px; margin: 18px 0; color: var(--muted);
+  }
+  .callout strong { color: var(--text); }
+  code {
+    background: #11131a; border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 6px; font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 0.9em;
+  }
+  pre {
+    background: #11131a; border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; overflow-x: auto; color: #cdd3dd;
+  }
+  footer { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 0.9rem; }
+  .faq { margin-bottom: 18px; }
+  .faq summary { cursor: pointer; font-weight: 600; padding: 14px 0; }
+  .faq[open] summary { color: var(--green); }
+  .faq p { color: var(--muted); margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text); } td { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="logo"><span></span><span></span><span></span></div>
+    <h1>GGUF Benchmark Tool</h1>
+    <p class="tagline">
+      Measure how fast a local AI model runs on your PC. Load a <code>.gguf</code>
+      model, click a button, get tokens-per-second. No command line required.
+    </p>
+    <a class="btn" href="https://github.com/giek2000/GGUF-Benchmark-Tool/releases/latest">Download for Windows</a>
+    <a class="btn secondary" href="https://github.com/giek2000/GGUF-Benchmark-Tool">View on GitHub</a>
+    <div class="sub">Free &amp; open source (MIT) &middot; Single <code>.exe</code>, no installer &middot; Windows x64</div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>What is it?</h2>
+    <p style="color:var(--muted); max-width:720px;">
+      GGUF models are the files used to run language models locally with
+      <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a>. This tool is a
+      friendly window around llama.cpp's benchmark program, <code>llama-bench</code>.
+      Pick a model, choose how hard to push it, and it tells you the speed in
+      tokens per second &mdash; so you can compare models, quantizations, and
+      CPU-vs-GPU settings on your own hardware.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <div class="grid">
+      <div class="card"><div class="ico">⚡</div><h3>One-click benchmarks</h3><p>Load a GGUF file, hit Run, and read the speed. Live output as it runs.</p></div>
+      <div class="card"><div class="ico">🎛️</div><h3>Easy presets</h3><p>Quick, Standard, Prompt sweep and more &mdash; or tune threads, GPU layers, batch size yourself.</p></div>
+      <div class="card"><div class="ico">🖥️</div><h3>CPU &amp; GPU</h3><p>Download the right llama.cpp build (CPU, CUDA, Vulkan, SYCL, ROCm) from inside the app.</p></div>
+      <div class="card"><div class="ico">🔍</div><h3>Model inspector</h3><p>See a model's architecture, quantization, context length and more &mdash; no loading needed.</p></div>
+      <div class="card"><div class="ico">📊</div><h3>Results history</h3><p>Every run is saved so you can compare models over time. Export to CSV.</p></div>
+      <div class="card"><div class="ico">🧰</div><h3>System info</h3><p>Detects your CPU, RAM and GPU(s) so you know what you're testing on.</p></div>
+      <div class="card"><div class="ico">🩹</div><h3>Clear error help</h3><p>If a run fails (driver mismatch, out of memory), it explains why and how to fix it.</p></div>
+      <div class="card"><div class="ico">📦</div><h3>Portable</h3><p>A single <code>.exe</code>. Nothing to install. Delete the file to uninstall.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Getting started</h2>
+    <ol class="steps">
+      <li><h3>Download &amp; run</h3><p>Grab <code>GGUFBenchmark.exe</code> from the <a href="https://github.com/giek2000/GGUF-Benchmark-Tool/releases/latest">latest release</a> and double-click it. Windows may warn about an unknown publisher &mdash; choose "More info → Run anyway".</p></li>
+      <li><h3>Get the engine</h3><p>In the top bar, pick a backend and click <strong>Download</strong>. Start with <strong>CPU (x64)</strong> if unsure. NVIDIA GPU users pick a CUDA build; AMD/Intel GPU users pick Vulkan.</p></li>
+      <li><h3>Load a model</h3><p>Click <strong>Load GGUF...</strong> and choose a <code>.gguf</code> file. Don't have one? Download from <a href="https://huggingface.co/models?library=gguf">Hugging Face</a>.</p></li>
+      <li><h3>Run the benchmark</h3><p>Pick a preset (or tweak the settings) and click <strong>Run Benchmark</strong>. The speed in tokens/second appears in the output and is saved to history.</p></li>
+    </ol>
+    <div class="callout">
+      <strong>Why download the engine separately?</strong> The llama.cpp binaries are
+      large and specific to your GPU type. The app fetches the exact official build
+      you need from GitHub, so the download stays small and always up to date.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Understanding the numbers</h2>
+    <table>
+      <tr><th>Term</th><th>What it means</th></tr>
+      <tr><td><code>pp</code> (prompt processing)</td><td>How fast the model reads your input (higher = faster).</td></tr>
+      <tr><td><code>tg</code> (text generation)</td><td>How fast the model writes new text, in tokens/second.</td></tr>
+      <tr><td><code>-ngl</code> (GPU layers)</td><td>How much of the model runs on the GPU. 0 = CPU only, 99 = all on GPU.</td></tr>
+      <tr><td>tokens/second</td><td>The headline speed. Roughly, how many word-pieces per second.</td></tr>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>FAQ</h2>
+    <details class="faq"><summary>Is it free?</summary><p>Yes. It's open source under the MIT license.</p></details>
+    <details class="faq"><summary>Does it work on Mac or Linux?</summary><p>The pre-built <code>.exe</code> is for Windows x64. On other systems you can run the Python source directly (<code>python gguf_benchmark.py</code>) if you have a <code>llama-bench</code> binary for your platform.</p></details>
+    <details class="faq"><summary>I got a CUDA "unsupported toolchain" error.</summary><p>Your NVIDIA driver is older than the CUDA build. In the engine bar pick <strong>CUDA 12.x (older drivers)</strong> and Download, or update your driver, or switch to the Vulkan backend. The app shows these steps automatically when it happens.</p></details>
+    <details class="faq"><summary>Where are my results saved?</summary><p>Next to the <code>.exe</code> in <code>gguf_benchmark_history.json</code>. You can also export the history to CSV from the Results History tab.</p></details>
+    <details class="faq"><summary>Does it send my data anywhere?</summary><p>No. It only contacts GitHub when you choose to download a llama.cpp build. Your models and results stay on your machine.</p></details>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Run from source</h2>
+    <pre>git clone https://github.com/giek2000/GGUF-Benchmark-Tool.git
+cd GGUF-Benchmark-Tool
+python gguf_benchmark.py</pre>
+    <p style="color:var(--muted);">Only the Python standard library is required to run. To build the <code>.exe</code> yourself, run <code>build.bat</code> (installs PyInstaller).</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>GGUF Benchmark Tool &middot; MIT License &middot;
+      <a href="https://github.com/giek2000/GGUF-Benchmark-Tool">GitHub</a></p>
+    <p>Not affiliated with the llama.cpp project. Model speeds depend on your hardware, drivers and settings.</p>
+  </div>
+</footer>
+
+</body>
+</html>

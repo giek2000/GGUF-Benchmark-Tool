@@ -1,0 +1,27 @@
+@echo off
+echo ============================================
+echo  Building GGUF Benchmark Tool v2.2.0
+echo ============================================
+echo.
+
+pip install pyinstaller
+
+echo.
+echo Generating application icon...
+python make_icon.py
+
+echo.
+echo Building standalone EXE...
+python -m PyInstaller --onefile --windowed --name "GGUFBenchmark_v2.2.0" ^
+  --icon "icon.ico" ^
+  --add-data "icon.ico;." ^
+  --hidden-import gguf_reader ^
+  --hidden-import system_info ^
+  gguf_benchmark.py
+
+echo.
+echo ============================================
+echo  Build complete!
+echo  EXE location: dist\GGUFBenchmark_v2.2.0.exe
+echo ============================================
+pause
