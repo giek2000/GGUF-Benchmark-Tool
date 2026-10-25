@@ -129,22 +129,6 @@ with the app icon embedded.
 - Config and history are stored next to the exe as
   `gguf_benchmark_config.json` and `gguf_benchmark_history.json`.
 
-## Robustness
-
-The app is hardened for everyday use:
-
-- All benchmark inputs are validated before a command runs (clear messages for
-  bad numbers, empty fields, or unparseable extra args).
-- Worker threads can never leave the UI stuck "running" — the busy state is
-  always released, even on an unexpected error.
-- Config and history are written atomically, so an interrupted save can't
-  corrupt them; a malformed history file is sanitized on load.
-- The GGUF reader bounds all length/count fields against the file size, so a
-  corrupt or hostile `.gguf` can't exhaust memory or hang.
-- Engine downloads are restricted to GitHub HTTPS hosts and extracted with a
-  path-traversal ("zip-slip") guard.
-- Stopping or quitting terminates the whole engine process tree.
-
 ## Credits
 
 © 2026 Created by **Ricardo de Koning**. MIT licensed.
