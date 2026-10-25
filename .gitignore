@@ -22,3 +22,6 @@ llama.cpp/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Release helper (not part of the repo)
+RELEASE_NOTES.md
