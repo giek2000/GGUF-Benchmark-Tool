@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo  Building GGUF Benchmark Tool v2.4.0
+echo  Building GGUF Benchmark Tool v2.4.1
 echo ============================================
 echo.
 
@@ -12,7 +12,7 @@ python make_icon.py
 
 echo.
 echo Building standalone EXE...
-python -m PyInstaller --onefile --windowed --name "GGUFBenchmark_v2.4.0" ^
+python -m PyInstaller --onefile --windowed --name "GGUFBenchmark_v2.4.1" ^
   --icon "icon.ico" ^
   --add-data "icon.ico;." ^
   --hidden-import gguf_reader ^
@@ -22,6 +22,6 @@ python -m PyInstaller --onefile --windowed --name "GGUFBenchmark_v2.4.0" ^
 echo.
 echo ============================================
 echo  Build complete!
-echo  EXE location: dist\GGUFBenchmark_v2.4.0.exe
+echo  EXE location: dist\GGUFBenchmark_v2.4.1.exe
 echo ============================================
 pause

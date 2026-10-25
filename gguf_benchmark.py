@@ -51,7 +51,7 @@ import system_info
 
 
 APP_NAME = "GGUF Benchmark Tool"
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.4.1"
 APP_AUTHOR = "Ricardo de Koning"
 CONFIG_FILENAME = "gguf_benchmark_config.json"
 HISTORY_FILENAME = "gguf_benchmark_history.json"
@@ -770,9 +770,12 @@ class BenchmarkApp(tk.Tk):
             self.cfg["last_model"] = path
             self.cfg["last_model_dir"] = str(Path(path).parent)
             save_config(self.cfg)
-            self._inspect_current_model()
+            # Populate the Model Info tab in the background, but stay on the
+            # current (Benchmark) tab so loading a model doesn't yank the user
+            # away. The 'Inspect' button is how they switch to Model Info.
+            self._inspect_current_model(switch_tab=False)
 
-    def _inspect_current_model(self):
+    def _inspect_current_model(self, switch_tab: bool = True):
         model = self.model_var.get().strip()
         if not model:
             messagebox.showwarning(APP_NAME, "Load a GGUF model first.")
@@ -784,7 +787,8 @@ class BenchmarkApp(tk.Tk):
         else:
             self.modelinfo.insert("end", "\n".join(info.summary_lines()))
             self.status_var.set(f"Inspected: {info.architecture} / {info.quantization}")
-        self.nb.select(2)
+        if switch_tab:
+            self.nb.select(2)
 
     # ---- Run --------------------------------------------------------------#
     def _engine_ok(self) -> bool:

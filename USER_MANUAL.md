@@ -138,8 +138,10 @@ Notes:
 
 ### Model
 
-- **Load GGUF...** — choose the model file to test.
-- **Inspect** — jump to the Model Info tab and read the model's details.
+- **Load GGUF...** — choose the model file to test. You stay on the Benchmark
+  tab; the model's details are read in the background and are available on the
+  Model Info tab whenever you want them.
+- **Inspect** — switch to the Model Info tab and read the model's details.
 
 ### Preset
 
