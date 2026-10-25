@@ -1,4 +1,7 @@
-# GGUF Benchmark Tool v2.3.0
+# GGUF Benchmark Tool v2.3.1
+
+> New to the app? Read the **[User Manual](USER_MANUAL.md)** for a full,
+> plain-language walkthrough.
 
 A standalone Windows application to load a **GGUF** model file and benchmark it
 using **llama.cpp**'s `llama-bench`.
@@ -100,7 +103,7 @@ on Windows).
 build.bat
 ```
 
-Produces `dist\GGUFBenchmark_v2.3.0.exe` — a single-file, windowed executable
+Produces `dist\GGUFBenchmark_v2.3.1.exe` — a single-file, windowed executable
 with the app icon embedded.
 
 ## Benchmark parameters

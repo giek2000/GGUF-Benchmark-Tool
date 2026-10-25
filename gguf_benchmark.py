@@ -51,7 +51,7 @@ import system_info
 
 
 APP_NAME = "GGUF Benchmark Tool"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 APP_AUTHOR = "Ricardo de Koning"
 CONFIG_FILENAME = "gguf_benchmark_config.json"
 HISTORY_FILENAME = "gguf_benchmark_history.json"
@@ -792,9 +792,17 @@ class BenchmarkApp(tk.Tk):
         first_text = self._run_blocking(display_cmd, stream=True)
         rc = self._last_returncode
 
-        # 2) Detect failure. llama-bench returns non-zero or crashes hard on
-        #    backend/driver errors. Don't re-run a crashing command for history.
-        failed = (rc is None) or (rc != 0) or _looks_like_failure(first_text)
+        # 2) Decide success. The EXIT CODE is authoritative: llama-bench returns
+        #    0 on success and non-zero on real errors. Benign startup lines
+        #    (e.g. "ggml_cuda_init: found 1 CUDA devices") must NOT be mistaken
+        #    for failures, so output markers are only consulted when the exit
+        #    code already indicates a problem (or is missing / a hard crash).
+        if rc == 0:
+            failed = False
+        elif rc is None:
+            failed = True  # could not launch / no exit code captured
+        else:
+            failed = True  # any non-zero exit is a failure
         if failed:
             self._out_queue.put("\n" + _diagnose_failure(rc, first_text, params))
             return  # _start_worker emits __DONE__
@@ -804,7 +812,7 @@ class BenchmarkApp(tk.Tk):
             self._out_queue.put("\nCapturing structured results for history...\n")
             json_cmd = params.build_command(self.llama_bench_path, force_format="json")
             json_text = self._run_blocking(json_cmd, stream=False)
-            if self._last_returncode not in (0, None) or _looks_like_failure(json_text):
+            if self._last_returncode not in (0, None):
                 self._out_queue.put("(History capture run did not complete cleanly; skipping.)\n")
                 json_text = ""
         else:
@@ -1082,32 +1090,41 @@ def _fmt_num(v) -> str:
 
 
 def _looks_like_failure(text: str) -> bool:
-    """Heuristic detection of a failed/crashed llama-bench run from its output."""
+    """Detect a genuinely failed/crashed llama-bench run from its output.
+
+    IMPORTANT: this must NOT fire on normal startup lines. llama.cpp prints
+    benign lines like 'ggml_cuda_init: found 1 CUDA devices' and
+    'load_backend: loaded CUDA backend ...' on every successful GPU run, so we
+    match only unambiguous ERROR phrases, not backend names. The authoritative
+    success signal is the process exit code; this is only a secondary check.
+    """
     if not text:
         return False
     low = text.lower()
-    markers = (
-        "cuda error",
-        "ggml_cuda",
+
+    # Unambiguous error phrases. Each is specific enough that it does not appear
+    # in a normal, successful run's output.
+    error_markers = (
+        "cuda error",            # "CUDA error: ..."
+        "ggml_cuda_compute",     # kernel launch failures
         "unsupported toolchain",
         "out of memory",
+        "cudamalloc failed",
         "failed to load model",
         "error loading model",
         "unknown argument",
         "invalid argument",
+        "error: invalid",
         "no such file",
-        "assert",
-        "terminate called",
-        "vk::",            # vulkan errors
-        "hip error",       # rocm errors
-        "sycl",            # sycl errors often print SYCL exception
+        "terminate called",      # unhandled C++ exception
+        "what():",               # C++ exception message
+        "hip error",             # rocm
+        "sycl exception",        # sycl
+        "vk::",                  # vulkan error types
+        "aborted",
+        "segmentation fault",
     )
-    # "sycl" alone is too broad (appears in normal SYCL backend load lines),
-    # so only count it when paired with an error word.
-    hit = any(m in low for m in markers if m != "sycl")
-    if not hit and "sycl" in low and ("error" in low or "exception" in low):
-        hit = True
-    return hit
+    return any(m in low for m in error_markers)
 
 
 def _diagnose_failure(rc, text: str, params: "BenchParams") -> str:
