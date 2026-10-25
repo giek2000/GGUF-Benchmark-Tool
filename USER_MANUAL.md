@@ -1,6 +1,6 @@
 # GGUF Benchmark Tool — User Manual
 
-Version 2.3.1 · © 2026 Created by Ricardo de Koning · MIT License
+Version 2.4.1 · 2026 Created by Ricardo de Koning · MIT License
 
 ---
 
@@ -74,7 +74,7 @@ works on CPU alone.
 │  (contents of the selected tab)                                │
 │                                                                │
 ├──────────────────────────────────────────────────────────────┤
-│ App name + version │      status      │ © 2026 Ricardo de K.   │  ← footer
+│ App name + version │      status      │ 2026 Ricardo de Koning │  ← footer
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -342,5 +342,5 @@ always current.
 
 ---
 
-*GGUF Benchmark Tool — © 2026 Created by Ricardo de Koning. Not affiliated with
+*GGUF Benchmark Tool — 2026 Created by Ricardo de Koning. Not affiliated with
 the llama.cpp project.*

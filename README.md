@@ -131,4 +131,4 @@ with the app icon embedded.
 
 ## Credits
 
-© 2026 Created by **Ricardo de Koning**. MIT licensed.
+2026 Created by **Ricardo de Koning**. MIT licensed.

@@ -403,7 +403,7 @@ class BenchmarkApp(tk.Tk):
         statusbar.pack(fill="x", side="bottom")
         ttk.Label(statusbar, text=f"{APP_NAME} v{APP_VERSION}", anchor="w").pack(
             side="left", padx=8, pady=2)
-        ttk.Label(statusbar, text=f"\u00a9 2026 Created by {APP_AUTHOR}", anchor="e",
+        ttk.Label(statusbar, text=f"2026 Created by {APP_AUTHOR}", anchor="e",
                   foreground="#888").pack(side="right", padx=8, pady=2)
         ttk.Label(statusbar, textvariable=self.status_var, anchor="center",
                   foreground="#666").pack(side="right", fill="x", expand=True, padx=8, pady=2)
