@@ -6,6 +6,8 @@
 A standalone Windows application to load a **GGUF** model file and benchmark it
 using **llama.cpp**'s `llama-bench`.
 
+![GGUF Benchmark Tool user interface](UI.png)
+
 ## Features
 
 - **Load & inspect GGUF** — pick a `.gguf` file and read its header to show
