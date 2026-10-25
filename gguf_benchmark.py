@@ -30,15 +30,16 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import threading
-import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -50,7 +51,8 @@ import system_info
 
 
 APP_NAME = "GGUF Benchmark Tool"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
+APP_AUTHOR = "Ricardo de Koning"
 CONFIG_FILENAME = "gguf_benchmark_config.json"
 HISTORY_FILENAME = "gguf_benchmark_history.json"
 # The llama.cpp binary builds live under bXXXXX tags, NOT under /releases/latest
@@ -143,11 +145,23 @@ def _json_load(path: Path, default):
 
 
 def _json_save(path: Path, data) -> None:
+    """Write JSON atomically: dump to a temp file then replace, so an
+    interrupted write can never corrupt the existing file."""
+    tmp = None
     try:
-        with open(path, "w", encoding="utf-8") as fh:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
     except Exception:
-        pass
+        # Best-effort: clean up a stray temp file if the replace failed.
+        try:
+            if tmp is not None and tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
 
 
 def load_config() -> dict:
@@ -160,7 +174,11 @@ def save_config(cfg: dict) -> None:
 
 def load_history() -> list:
     data = _json_load(app_dir() / HISTORY_FILENAME, [])
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    # Keep only well-formed dict entries so a hand-edited or corrupt file
+    # can't crash the history table.
+    return [e for e in data if isinstance(e, dict)]
 
 
 def save_history(history: list) -> None:
@@ -198,6 +216,52 @@ class BenchParams:
     output_format: str = "md"
     extra_args: str = ""
 
+    def validate(self) -> str | None:
+        """Return an error message if any field is invalid, else None.
+        Numeric fields accept comma-separated non-negative integers (llama-bench
+        allows e.g. -p 128,512). Threads/ngl/batch accept a single integer."""
+        def check_int_list(value: str, label: str, allow_empty: bool) -> str | None:
+            value = value.strip()
+            if not value:
+                return None if allow_empty else f"{label} cannot be empty."
+            for part in value.split(","):
+                part = part.strip()
+                if not part:
+                    return f"{label} has an empty value in the list."
+                if not part.isdigit():
+                    return f"{label} must be whole number(s), got '{part}'."
+            return None
+
+        def check_int(value: str, label: str, allow_empty: bool, min_v: int = 0) -> str | None:
+            value = value.strip()
+            if not value:
+                return None if allow_empty else f"{label} cannot be empty."
+            if not (value.isdigit() and int(value) >= min_v):
+                return f"{label} must be a whole number >= {min_v}, got '{value}'."
+            return None
+
+        checks = [
+            check_int_list(self.n_prompt, "Prompt tokens (-p)", allow_empty=True),
+            check_int_list(self.n_gen, "Gen tokens (-n)", allow_empty=True),
+            check_int(self.n_threads, "Threads (-t)", allow_empty=True, min_v=1),
+            check_int(self.n_gpu_layers, "GPU layers (-ngl)", allow_empty=True, min_v=0),
+            check_int(self.batch_size, "Batch size (-b)", allow_empty=True, min_v=1),
+            check_int(self.repetitions, "Repetitions (-r)", allow_empty=True, min_v=1),
+        ]
+        if not self.n_prompt.strip() and not self.n_gen.strip():
+            return "Set at least one of Prompt tokens (-p) or Gen tokens (-n)."
+        if self.output_format not in ("md", "csv", "json", "jsonl", "sql"):
+            return f"Unknown output format: {self.output_format}"
+        for err in checks:
+            if err:
+                return err
+        # Extra args must parse cleanly.
+        try:
+            shlex.split(self.extra_args)
+        except ValueError as exc:
+            return f"Extra args could not be parsed: {exc}"
+        return None
+
     def build_command(self, llama_bench: str, force_format: str | None = None) -> list[str]:
         cmd: list[str] = [llama_bench, "-m", self.model_path]
 
@@ -215,7 +279,12 @@ class BenchParams:
         add("-o", force_format or self.output_format)
         extra = self.extra_args.strip()
         if extra:
-            cmd.extend(extra.split())
+            try:
+                cmd.extend(shlex.split(extra))
+            except ValueError:
+                # Fall back to naive split if shlex can't parse (already warned
+                # at validation time).
+                cmd.extend(extra.split())
         return cmd
 
 
@@ -259,7 +328,8 @@ class BenchmarkApp(tk.Tk):
         self._proc: subprocess.Popen | None = None
         self._out_queue: "queue.Queue" = queue.Queue()
         self._running = False
-        self._last_json_capture: list[dict] = []
+        self._last_returncode: int | None = None
+        self._captured_text: str = ""
 
         self._build_ui()
         self._refresh_engine_label()
@@ -297,8 +367,17 @@ class BenchmarkApp(tk.Tk):
         self._build_modelinfo_tab()
         self._build_system_tab()
 
+        # Status bar: app name + version (left), live status (center),
+        # attribution (right).
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(self, textvariable=self.status_var, relief="sunken", anchor="w").pack(fill="x", side="bottom")
+        statusbar = ttk.Frame(self, relief="sunken")
+        statusbar.pack(fill="x", side="bottom")
+        ttk.Label(statusbar, text=f"{APP_NAME} v{APP_VERSION}", anchor="w").pack(
+            side="left", padx=8, pady=2)
+        ttk.Label(statusbar, text=f"\u00a9 2026 Created by {APP_AUTHOR}", anchor="e",
+                  foreground="#888").pack(side="right", padx=8, pady=2)
+        ttk.Label(statusbar, textvariable=self.status_var, anchor="center",
+                  foreground="#666").pack(side="right", fill="x", expand=True, padx=8, pady=2)
 
     def _build_benchmark_tab(self):
         tab = ttk.Frame(self.nb)
@@ -472,7 +551,7 @@ class BenchmarkApp(tk.Tk):
         self.nb.select(0)
         self._clear_output()
         self._set_running(True, status=f"Downloading {backend} build...")
-        threading.Thread(target=self._download_engine_worker, args=(backend,), daemon=True).start()
+        self._start_worker(self._download_engine_worker, backend)
 
     def _fetch_json(self, url: str):
         req = urllib.request.Request(url, headers={"User-Agent": APP_NAME,
@@ -503,8 +582,25 @@ class BenchmarkApp(tk.Tk):
                     return asset.get("browser_download_url"), name, asset.get("size", 0)
         return None, None, 0
 
+    @staticmethod
+    def _is_trusted_download_url(url: str) -> bool:
+        """Only allow downloads over HTTPS from GitHub-owned hosts. The result
+        is extracted and an .exe inside is later executed, so the source must
+        be constrained even though the API itself is trusted."""
+        try:
+            parts = urllib.parse.urlparse(url)
+        except Exception:
+            return False
+        if parts.scheme != "https":
+            return False
+        host = (parts.hostname or "").lower()
+        allowed = ("github.com", "githubusercontent.com")
+        return any(host == d or host.endswith("." + d) for d in allowed)
+
     def _download_to(self, url: str, name: str, dest_dir: Path):
         """Download a zip with progress reporting and extract into dest_dir."""
+        if not self._is_trusted_download_url(url):
+            raise ValueError(f"refusing download from untrusted URL: {url}")
         self._out_queue.put(f"Downloading {name} ...\n")
         req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
         with urllib.request.urlopen(req, timeout=300) as resp:
@@ -526,7 +622,16 @@ class BenchmarkApp(tk.Tk):
                             f"\r  {pct:3d}%  ({read//(1024*1024)}/{total//(1024*1024)} MB)")
             blob = b"".join(chunks)
         self._out_queue.put(f"\n  Extracting {name} ...\n")
+        dest_dir = dest_dir.resolve()
         with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            # Guard against path traversal ("zip slip"): refuse any entry that
+            # would land outside dest_dir.
+            for member in zf.namelist():
+                target = (dest_dir / member).resolve()
+                # Component-based containment check (a plain string prefix would
+                # wrongly accept a sibling like 'llama.cpp-evil').
+                if dest_dir != target and dest_dir not in target.parents:
+                    raise ValueError(f"unsafe path in archive: {member}")
             zf.extractall(dest_dir)
 
     def _download_engine_worker(self, backend: str):
@@ -544,7 +649,6 @@ class BenchmarkApp(tk.Tk):
                     "  1. Try the CPU (x64) build, which is always available, or\n"
                     "  2. Pick a different GPU backend (Vulkan works on most GPUs), or\n"
                     f"  3. Download manually and use 'Browse...':\n     {LLAMA_RELEASES_PAGE}\n")
-                self._out_queue.put("__DONE__")
                 return
 
             self._out_queue.put(f"Using release {tag}.\n")
@@ -555,7 +659,6 @@ class BenchmarkApp(tk.Tk):
             url, name, size = self._pick_asset(release, match)
             if not url:
                 self._out_queue.put("Could not resolve the download URL. Try 'Browse...' instead.\n")
-                self._out_queue.put("__DONE__")
                 return
             if size:
                 self._out_queue.put(f"Engine package: {name} ({size//(1024*1024)} MB)\n")
@@ -581,7 +684,6 @@ class BenchmarkApp(tk.Tk):
                 self._out_queue.put(
                     "\nDownloaded and extracted, but llama-bench.exe wasn't found inside.\n"
                     "The release layout may have changed. Use 'Browse...' to locate it manually.\n")
-                self._out_queue.put("__DONE__")
                 return
 
             self.llama_bench_path = found
@@ -590,24 +692,21 @@ class BenchmarkApp(tk.Tk):
             self._out_queue.put(f"\nDone. Engine ready:\n  {found}\n")
             if spec.get("needs_cudart"):
                 self._out_queue.put("Tip: set 'GPU layers (-ngl)' to 99 to offload the whole model.\n")
-            self._out_queue.put("__DONE__")
+            # _start_worker emits __DONE__
         except urllib.error.HTTPError as exc:
             self._out_queue.put(
                 f"\nGitHub returned HTTP {exc.code} while downloading.\n"
                 "This is often a temporary rate limit. Wait a minute and retry,\n"
                 f"or download manually: {LLAMA_RELEASES_PAGE}\n")
-            self._out_queue.put("__DONE__")
         except urllib.error.URLError as exc:
             self._out_queue.put(
                 f"\nNetwork error: {exc.reason}\n"
                 "Check your internet connection or firewall, then retry.\n"
                 f"You can also download manually: {LLAMA_RELEASES_PAGE}\n")
-            self._out_queue.put("__DONE__")
         except Exception as exc:  # noqa: BLE001
             self._out_queue.put(
                 f"\nDownload failed: {exc}\n"
                 f"You can download manually and use 'Browse...': {LLAMA_RELEASES_PAGE}\n")
-            self._out_queue.put("__DONE__")
 
     def _list_devices(self):
         if self._running:
@@ -619,7 +718,7 @@ class BenchmarkApp(tk.Tk):
         self._append_output("Listing compute devices...\n\n")
         self._set_running(True, status="Listing devices...")
         cmd = [self.llama_bench_path, "--list-devices"]
-        threading.Thread(target=self._run_worker, args=(cmd, False), daemon=True).start()
+        self._start_worker(self._run_worker, cmd, False)
 
     # ---- Model ------------------------------------------------------------#
     def _browse_model(self):
@@ -664,11 +763,16 @@ class BenchmarkApp(tk.Tk):
         if not Path(model).is_file():
             messagebox.showwarning(APP_NAME, f"Model file not found:\n{model}")
             return None
-        return BenchParams(
+        params = BenchParams(
             model_path=model, n_prompt=self.p_prompt.get(), n_gen=self.p_gen.get(),
             n_threads=self.p_threads.get(), n_gpu_layers=self.p_ngl.get(),
             batch_size=self.p_batch.get(), repetitions=self.p_reps.get(),
             output_format=self.p_format.get(), extra_args=self.p_extra.get())
+        err = params.validate()
+        if err:
+            messagebox.showwarning(APP_NAME, err)
+            return None
+        return params
 
     def _run_benchmark(self):
         if self._running or not self._engine_ok():
@@ -678,11 +782,10 @@ class BenchmarkApp(tk.Tk):
             return
         # Run with the user's chosen display format, but also capture JSON for history.
         display_cmd = params.build_command(self.llama_bench_path)
-        self._pending_params = params
         self._clear_output()
         self._append_output("Command:\n  " + " ".join(_quote(a) for a in display_cmd) + "\n\n")
         self._set_running(True, status="Benchmarking...")
-        threading.Thread(target=self._benchmark_sequence, args=(params, display_cmd), daemon=True).start()
+        self._start_worker(self._benchmark_sequence, params, display_cmd)
 
     def _benchmark_sequence(self, params: BenchParams, display_cmd: list[str]):
         # 1) Stream the human-readable run to the console.
@@ -694,8 +797,7 @@ class BenchmarkApp(tk.Tk):
         failed = (rc is None) or (rc != 0) or _looks_like_failure(first_text)
         if failed:
             self._out_queue.put("\n" + _diagnose_failure(rc, first_text, params))
-            self._out_queue.put("__DONE__")
-            return
+            return  # _start_worker emits __DONE__
 
         # 3) Capture structured results for history.
         if params.output_format not in ("json", "jsonl"):
@@ -714,7 +816,7 @@ class BenchmarkApp(tk.Tk):
             self._out_queue.put(f"Recorded {len(rows)} result row(s) to history.\n")
         else:
             self._out_queue.put("No structured results were produced, so nothing was added to history.\n")
-        self._out_queue.put("__DONE__")
+        # _start_worker emits __DONE__
 
     def _run_blocking(self, cmd: list[str], stream: bool) -> str:
         """Run a command to completion. If stream, push lines live; return full text.
@@ -749,17 +851,23 @@ class BenchmarkApp(tk.Tk):
 
     def _run_worker(self, cmd: list[str], record: bool):
         self._run_blocking(cmd, stream=True)
-        self._out_queue.put("__DONE__")
+        # _start_worker emits __DONE__
 
     def _store_results(self, params: BenchParams, rows: list[dict]):
+        """Build history entries (safe on the worker thread) then commit the
+        mutation, save, and refresh on the UI thread to avoid a data race with
+        the delete/export/refresh handlers."""
         when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         model_name = Path(params.model_path).name
+        entries = []
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             # llama-bench json keys vary slightly across versions; be defensive.
             test = row.get("test") or _derive_test_name(row)
             avg = row.get("avg_ts") or row.get("t/s") or row.get("tokens_per_second")
             std = row.get("stddev_ts") or row.get("stddev")
-            entry = {
+            entries.append({
                 "when": when,
                 "model": model_name,
                 "model_path": params.model_path,
@@ -769,12 +877,17 @@ class BenchmarkApp(tk.Tk):
                 "tps": _fmt_num(avg),
                 "stddev": _fmt_num(std),
                 "raw": row,
-            }
+            })
+        if entries:
+            self.after(0, lambda: self._commit_results(entries))
+
+    def _commit_results(self, entries: list[dict]):
+        """Runs on the UI thread: mutate history, persist, refresh table."""
+        for entry in entries:
             self.history.insert(0, entry)
-        # keep history bounded
         self.history = self.history[:500]
         save_history(self.history)
-        self.after(0, self._refresh_history_table)
+        self._refresh_history_table()
 
     # ---- History ----------------------------------------------------------#
     def _refresh_history_table(self):
@@ -831,6 +944,8 @@ class BenchmarkApp(tk.Tk):
         threading.Thread(target=self._refresh_system_worker, daemon=True).start()
 
     def _refresh_system_worker(self):
+        # Launched as a raw thread (not via _start_worker) because it never
+        # toggles the running state; it only marshals its text back via after().
         try:
             lines = system_info.collect()
         except Exception as exc:  # noqa: BLE001
@@ -872,8 +987,10 @@ class BenchmarkApp(tk.Tk):
             return
         ext = self.p_format.get()
         default_ext = f".{ext}" if ext in {"csv", "json", "jsonl", "md"} else ".txt"
-        path = filedialog.asksaveasfilename(title="Save benchmark output", defaultextension=default_ext,
-                                            filetypes=[("Text", "*.*")])
+        path = filedialog.asksaveasfilename(
+            title="Save benchmark output", defaultextension=default_ext,
+            filetypes=[("Markdown", "*.md"), ("CSV", "*.csv"), ("JSON", "*.json"),
+                       ("Text", "*.txt"), ("All files", "*.*")])
         if path:
             try:
                 with open(path, "w", encoding="utf-8") as fh:
@@ -882,13 +999,52 @@ class BenchmarkApp(tk.Tk):
             except Exception as exc:  # noqa: BLE001
                 messagebox.showerror(APP_NAME, f"Could not save file:\n{exc}")
 
-    def _stop_benchmark(self):
-        if self._proc and self._proc.poll() is None:
+    def _terminate_proc(self):
+        """Terminate the running engine process and its children, if any."""
+        proc = self._proc
+        if not proc or proc.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                # taskkill /T kills the whole process tree, which plain
+                # terminate() may miss for engines that spawn children.
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    timeout=10)
+            else:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception:
+            # Last resort
             try:
-                self._proc.terminate()
-                self._append_output("\n[Stopped by user]\n")
+                proc.kill()
             except Exception:
                 pass
+
+    def _stop_benchmark(self):
+        if self._proc and self._proc.poll() is None:
+            self._terminate_proc()
+            self._append_output("\n[Stopped by user]\n")
+
+    # ---- Worker management ------------------------------------------------#
+    def _start_worker(self, target, *args):
+        """Launch a worker thread that is GUARANTEED to end the running state.
+        If the worker raises, the error is reported and '__DONE__' is still
+        emitted so the UI never gets stuck disabled."""
+        def runner():
+            try:
+                target(*args)
+            except Exception as exc:  # noqa: BLE001
+                self._out_queue.put(f"\nUnexpected error: {exc}\n")
+            finally:
+                # Ensure the UI is released exactly once.
+                self._out_queue.put("__DONE__")
+        threading.Thread(target=runner, daemon=True).start()
 
     # ---- State ------------------------------------------------------------#
     def _set_running(self, running: bool, status: str = ""):
@@ -907,10 +1063,7 @@ class BenchmarkApp(tk.Tk):
         if self._running and self._proc and self._proc.poll() is None:
             if not messagebox.askyesno(APP_NAME, "A task is running. Quit anyway?"):
                 return
-            try:
-                self._proc.terminate()
-            except Exception:
-                pass
+            self._terminate_proc()
         self.destroy()
 
 
@@ -963,7 +1116,7 @@ def _diagnose_failure(rc, text: str, params: "BenchParams") -> str:
     lines = ["=" * 60, "Benchmark did NOT complete successfully.", ""]
 
     # Windows hard-crash exit code (0xC0000409 etc.)
-    crashed_hard = isinstance(rc, int) and rc < 0 or (isinstance(rc, int) and rc > 1 << 30)
+    crashed_hard = isinstance(rc, int) and (rc < 0 or rc > (1 << 30))
 
     if "unsupported toolchain" in low or ("cuda error" in low and "ptx" in low):
         lines += [

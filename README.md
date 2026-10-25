@@ -1,4 +1,4 @@
-# GGUF Benchmark Tool v2.2.0
+# GGUF Benchmark Tool v2.3.0
 
 A standalone Windows application to load a **GGUF** model file and benchmark it
 using **llama.cpp**'s `llama-bench`.
@@ -100,7 +100,7 @@ on Windows).
 build.bat
 ```
 
-Produces `dist\GGUFBenchmark_v2.0.0.exe` — a single-file, windowed executable
+Produces `dist\GGUFBenchmark_v2.3.0.exe` — a single-file, windowed executable
 with the app icon embedded.
 
 ## Benchmark parameters
@@ -123,3 +123,23 @@ with the app icon embedded.
   to record structured numbers. Pick `json`/`jsonl` to run only once.
 - Config and history are stored next to the exe as
   `gguf_benchmark_config.json` and `gguf_benchmark_history.json`.
+
+## Robustness
+
+The app is hardened for everyday use:
+
+- All benchmark inputs are validated before a command runs (clear messages for
+  bad numbers, empty fields, or unparseable extra args).
+- Worker threads can never leave the UI stuck "running" — the busy state is
+  always released, even on an unexpected error.
+- Config and history are written atomically, so an interrupted save can't
+  corrupt them; a malformed history file is sanitized on load.
+- The GGUF reader bounds all length/count fields against the file size, so a
+  corrupt or hostile `.gguf` can't exhaust memory or hang.
+- Engine downloads are restricted to GitHub HTTPS hosts and extracted with a
+  path-traversal ("zip-slip") guard.
+- Stopping or quitting terminates the whole engine process tree.
+
+## Credits
+
+© 2026 Created by **Ricardo de Koning**. MIT licensed.

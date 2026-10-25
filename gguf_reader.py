@@ -110,32 +110,57 @@ class GGUFInfo:
         return lines
 
 
-def _read_str(f) -> str:
-    (length,) = struct.unpack("<Q", f.read(8))
-    return f.read(length).decode("utf-8", errors="replace")
+class GGUFParseError(Exception):
+    """Raised when a GGUF file's self-described sizes are implausible."""
+
+
+def _remaining(f, file_size: int) -> int:
+    return file_size - f.tell()
+
+
+def _read_exact(f, n: int):
+    data = f.read(n)
+    if len(data) != n:
+        raise GGUFParseError("unexpected end of file")
+    return data
+
+
+def _read_str(f, file_size: int) -> str:
+    (length,) = struct.unpack("<Q", _read_exact(f, 8))
+    # A string can't be longer than the bytes left in the file. This rejects a
+    # hostile/corrupt length (e.g. 2**64-1) before allocating.
+    if length > _remaining(f, file_size):
+        raise GGUFParseError("string length exceeds file size")
+    return _read_exact(f, length).decode("utf-8", errors="replace")
 
 
 def _read_scalar(f, vtype: int):
-    fmt = {
-        T_UINT8: "<B", T_INT8: "<b", T_UINT16: "<H", T_INT16: "<h",
-        T_UINT32: "<I", T_INT32: "<i", T_FLOAT32: "<f", T_BOOL: "<?",
-        T_UINT64: "<Q", T_INT64: "<q", T_FLOAT64: "<d",
-    }[vtype]
+    try:
+        fmt = {
+            T_UINT8: "<B", T_INT8: "<b", T_UINT16: "<H", T_INT16: "<h",
+            T_UINT32: "<I", T_INT32: "<i", T_FLOAT32: "<f", T_BOOL: "<?",
+            T_UINT64: "<Q", T_INT64: "<q", T_FLOAT64: "<d",
+        }[vtype]
+    except KeyError:
+        raise GGUFParseError(f"unknown value type {vtype}")
     size = struct.calcsize(fmt)
-    return struct.unpack(fmt, f.read(size))[0]
+    return struct.unpack(fmt, _read_exact(f, size))[0]
 
 
-def _read_value(f, vtype: int):
+def _read_value(f, vtype: int, file_size: int):
     if vtype == T_STRING:
-        return _read_str(f)
+        return _read_str(f, file_size)
     if vtype == T_ARRAY:
-        (elem_type,) = struct.unpack("<I", f.read(4))
-        (count,) = struct.unpack("<Q", f.read(8))
+        (elem_type,) = struct.unpack("<I", _read_exact(f, 4))
+        (count,) = struct.unpack("<Q", _read_exact(f, 8))
+        # The smallest element is 1 byte, so count can't exceed the bytes left.
+        if count > _remaining(f, file_size):
+            raise GGUFParseError("array count exceeds file size")
         # Avoid loading enormous arrays (e.g. tokenizer vocab) fully into memory.
         max_items = 64
         values = []
         for i in range(count):
-            v = _read_value(f, elem_type)
+            v = _read_value(f, elem_type, file_size)
             if i < max_items:
                 values.append(v)
         if count > max_items:
@@ -149,29 +174,38 @@ def read_gguf(path: str, read_tensor_types: bool = True) -> GGUFInfo:
     info = GGUFInfo(path=path)
     try:
         info.file_size = Path(path).stat().st_size
+        fsize = info.file_size
         with open(path, "rb") as f:
-            (magic,) = struct.unpack("<I", f.read(4))
+            (magic,) = struct.unpack("<I", _read_exact(f, 4))
             if magic != GGUF_MAGIC:
                 info.error = "Not a GGUF file (bad magic number)."
                 return info
-            (info.version,) = struct.unpack("<I", f.read(4))
-            (info.tensor_count,) = struct.unpack("<Q", f.read(8))
-            (info.kv_count,) = struct.unpack("<Q", f.read(8))
+            (info.version,) = struct.unpack("<I", _read_exact(f, 4))
+            (info.tensor_count,) = struct.unpack("<Q", _read_exact(f, 8))
+            (info.kv_count,) = struct.unpack("<Q", _read_exact(f, 8))
+
+            # Each entry occupies several bytes, so neither count can exceed the
+            # file size. This rejects corrupt/hostile counts before looping.
+            if info.kv_count > fsize or info.tensor_count > fsize:
+                info.error = "GGUF header counts exceed file size (corrupt file)."
+                return info
 
             for _ in range(info.kv_count):
-                key = _read_str(f)
-                (vtype,) = struct.unpack("<I", f.read(4))
-                value = _read_value(f, vtype)
+                key = _read_str(f, fsize)
+                (vtype,) = struct.unpack("<I", _read_exact(f, 4))
+                value = _read_value(f, vtype, fsize)
                 info.metadata[key] = value
 
             if read_tensor_types:
                 try:
                     for _ in range(info.tensor_count):
-                        _name = _read_str(f)
-                        (n_dims,) = struct.unpack("<I", f.read(4))
-                        f.read(8 * n_dims)  # dimensions (uint64 each)
-                        (ttype,) = struct.unpack("<I", f.read(4))
-                        f.read(8)  # offset (uint64)
+                        _name = _read_str(f, fsize)
+                        (n_dims,) = struct.unpack("<I", _read_exact(f, 4))
+                        if n_dims > 8:  # GGML_MAX_DIMS is 4; 8 is a generous cap
+                            raise GGUFParseError("implausible tensor dimension count")
+                        _read_exact(f, 8 * n_dims)  # dimensions (uint64 each)
+                        (ttype,) = struct.unpack("<I", _read_exact(f, 4))
+                        _read_exact(f, 8)  # offset (uint64)
                         tname = GGML_TYPE_NAMES.get(ttype, f"type_{ttype}")
                         info.tensor_types[tname] = info.tensor_types.get(tname, 0) + 1
                 except Exception:
